@@ -47,13 +47,19 @@ class Server:
         communication with a client. After client with communucation
         finishes, servers starts to accept new connections again
         """
+        client_threads = []
         while not self._shutdown_event.is_set():
             try:
                 client_sock = self.__accept_new_connection()
                 if client_sock:
-                    self.__handle_client_connection(client_sock)
+                    thread = threading.Thread(target=self.__handle_client_connection, args=(client_sock,))
+                    client_threads.append(thread)
+                    thread.start()
+
             except OSError:
                 break  # server socket being closed
+        logging.info('action: server_shutdown | result: success')
+        self.__shutdown_workers(client_threads)
 
     def __handle_client_connection(self, client_sock: socket.socket):
         """
@@ -65,8 +71,6 @@ class Server:
         proto = Protocol(client_sock)
         try:
             self.handle_client(proto)
-            # addr = client_sock.getpeername()
-            # logging.info(f'action: receive_message | result: success | ip: {addr[0]}')
         except (ConnectionError, OSError) as e:
             logging.error(f"action: receive_message | result: fail | error: {e}")
         finally:
@@ -87,6 +91,12 @@ class Server:
         except BlockingIOError:
             return None
 
+    @staticmethod
+    def __shutdown_workers(client_threads):
+        for thread in client_threads:
+            thread.join()
+        logging.info("All client threads have finished.")
+
     def handle_client(self, proto: Protocol) -> None:
         """Handles client communication."""
         while True:
@@ -98,7 +108,6 @@ class Server:
                 handler: Callable[[Protocol, bytes], None] = self.message_handlers.get(message_type)
 
                 if handler:
-                    # Pass the entire message_data to the handler if necessary, or adjust slicing
                     handler(proto, message_data[1:])
                 else:
                     raise ProtocolError(f"Unknown message type: {message_type}", proto.consts.ERROR_INVALID_MESSAGE)
@@ -134,10 +143,6 @@ class Server:
         logging.info('Received MSG_NOTIFY')
         agency_id = proto.deserialize_agency_id(message_data)
         self.lottery_manager.notify_agency(agency_id)
-        if self.lottery_manager.all_agencies_notified():
-            logging.info('All agencies have notified. Proceeding with the lottery draw.')
-            self.lottery_manager.perform_lottery()
-        logging.info(f'action: notify_received | result: success | agency_id: {agency_id}')
 
     def handle_winners_query(self, proto: Protocol, message_data: bytes):
         logging.info('Received MSG_WINNERS_QUERY')

@@ -2,18 +2,20 @@ import threading
 import logging
 from common.utils import store_bets, load_bets, has_won, Bet
 from typing import List, Union
-
-# Constante que define cuántas agencias se van a esperar antes de realizar el sorteo
-AGENCY_COUNT: int = 5
+import os
 
 
 class LotteryManager:
     def __init__(self):
-        # Diccionario para rastrear notificaciones de agencias
-        self.agency_notifications: dict[int, bool] = {i: False for i in range(1, AGENCY_COUNT + 1)}
+        # Cargar el número de agencias desde la variable de entorno o usar 1 como valor predeterminado
+        self.agency_count: int = int(os.getenv('NUM_AGENCIES', 1))
+
         self.lock: threading.Lock = threading.Lock()
         self.lottery_done: bool = False
         self.winners: List[Bet] = []
+
+        # Inicializar la barrera para la sincronización entre agencias
+        self.agency_barrier = threading.Barrier(self.agency_count)
 
     def register_bet(self, bet: Bet) -> None:
         """
@@ -35,26 +37,16 @@ class LotteryManager:
 
     def notify_agency(self, agency_id: int) -> None:
         """
-        Marca a una agencia como notificada. Si ya ha sido notificada previamente, no se vuelve a procesar.
-        Cuando todas las agencias hayan notificado, realiza el sorteo y procesa las apuestas para determinar los ganadores.
+        Recibe la notificación de una agencia. Cuando todas las agencias hayan notificado, realiza el sorteo
+        y procesa las apuestas para determinar los ganadores.
         """
-        with self.lock:
-            if agency_id not in self.agency_notifications:
-                logging.error(f"Unknown agency ID: {agency_id}")
-                return
-
-            if self.agency_notifications[agency_id]:
-                logging.warning(f'Agency {agency_id} has already notified. Skipping.')
-                return
-
-            self.agency_notifications[agency_id] = True
-            logging.info(f'Agency {agency_id} has notified.')
-
-    def all_agencies_notified(self) -> bool:
-        """
-        Verifica si todas las agencias han notificado.
-        """
-        return all(self.agency_notifications.values())
+        logging.info(f'action: notify_received | result: success | agency_id: {agency_id}')
+    # Esperar hasta que todas las agencias hayan notificado
+        try:
+            self.agency_barrier.wait()  # Aquí se bloquea hasta que todas las agencias hayan notificado
+            self.perform_lottery()
+        except threading.BrokenBarrierError as e:
+            logging.error(f'Barrier error during notification handling: {e}')
 
     def perform_lottery(self) -> None:
         """
