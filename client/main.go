@@ -27,6 +27,14 @@ func InitConfig() (*viper.Viper, error) {
 
 	// Configure viper to read env variables with the CLI_ prefix
 	v.AutomaticEnv()
+
+	// Add bet env variables supported
+	v.BindEnv("nombre")
+	v.BindEnv("apellido")
+	v.BindEnv("documento")
+	v.BindEnv("nacimiento")
+	v.BindEnv("numero")
+
 	v.SetEnvPrefix("cli")
 	// Use a replacer to replace env variables underscores with points. This let us
 	// use nested configurations in the config file and at the same time define
@@ -44,13 +52,13 @@ func InitConfig() (*viper.Viper, error) {
 	// does not exists then ReadInConfig will fail but configuration
 	// can be loaded from the environment variables so we shouldn't
 	// return an error in that case
-	v.SetConfigFile("./config.yaml")
+	configPath := common.GetRelativePath("config.yaml")
+	v.SetConfigFile(configPath)
 	if err := v.ReadInConfig(); err != nil {
-		fmt.Printf("Configuration could not be read from config file. Using env variables instead")
+		fmt.Printf("Configuration could not be read from config file. Using env variables instead\n")
 	}
 
 	// Parse time.Duration variables and return an error if those variables cannot be parsed
-
 	if _, err := time.ParseDuration(v.GetString("loop.period")); err != nil {
 		return nil, errors.Wrapf(err, "Could not parse CLI_LOOP_PERIOD env var as time.Duration.")
 	}
@@ -112,6 +120,15 @@ func main() {
 		LoopPeriod:    v.GetDuration("loop.period"),
 	}
 
+	bet := common.Bet{
+		Agency:    v.GetInt("id"),
+		FirstName: v.GetString("nombre"),
+		LastName:  v.GetString("apellido"),
+		Document:  v.GetString("documento"),
+		BirthDate: v.GetTime("nacimiento"),
+		Number:    v.GetInt("numero"),
+	}
+
 	client := common.NewClient(clientConfig)
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
@@ -119,5 +136,5 @@ func main() {
 		<-sigs
 		client.StopClientLoop()
 	}()
-	client.StartClientLoop()
+	client.StartClientLoop(bet)
 }

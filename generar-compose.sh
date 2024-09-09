@@ -27,10 +27,34 @@ services:
       - testing_net
 EOL
 
+# Client details
+client1="Santiago Lionel,Lorca,30904465,1999-03-17,7574"
+client2="Luciana Valentina,Moreno,32567980,2000-06-21,8901"
+client3="Mateo Rodrigo,Pérez,31234567,1998-12-03,4562"
+client4="Catalina Sofía,Gómez,31098765,1997-05-14,1238"
+client5="Juan Manuel,Ruiz,31876543,1996-11-08,2345"
+
 # Dynamic generation of clients if num_clients is greater or equal to 1
 if [ "$num_clients" -ge 1 ]; then
   for i in $(seq 1 $num_clients)
   do
+    client_index=$(( (i-1) % 5 + 1 ))
+
+    case $client_index in
+      1) details=$client1 ;;
+      2) details=$client2 ;;
+      3) details=$client3 ;;
+      4) details=$client4 ;;
+      5) details=$client5 ;;
+    esac
+
+    # Splitting the client details
+    nombre=$(echo $details | cut -d',' -f1)
+    apellido=$(echo $details | cut -d',' -f2)
+    documento=$(echo $details | cut -d',' -f3)
+    nacimiento=$(echo $details | cut -d',' -f4)
+    numero=$(echo $details | cut -d',' -f5)
+
     cat <<EOL >> $output_file
   client$i:
     container_name: client$i
@@ -38,6 +62,11 @@ if [ "$num_clients" -ge 1 ]; then
     entrypoint: /client
     environment:
       - CLI_ID=$i
+      - NOMBRE=$nombre
+      - APELLIDO=$apellido
+      - DOCUMENTO=$documento
+      - NACIMIENTO=$nacimiento
+      - NUMERO=$numero
     volumes:
       - ./client/config.yaml:/config.yaml:ro
     networks:

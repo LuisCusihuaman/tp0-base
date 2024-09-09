@@ -2,6 +2,8 @@ import socket
 import logging
 import signal
 import threading
+from common.protocol import Protocol, ProtocolError
+from common.utils import store_bets
 
 
 class Server:
@@ -31,7 +33,6 @@ class Server:
         communication with a client. After client with communucation
         finishes, servers starts to accept new connections again
         """
-
         while not self._shutdown_event.is_set():
             try:
                 client_sock = self.__accept_new_connection()
@@ -39,21 +40,19 @@ class Server:
             except OSError:
                 break  # server socket being closed
 
-    def __handle_client_connection(self, client_sock):
+    def __handle_client_connection(self, client_sock: socket.socket):
         """
         Read message from a specific client socket and closes the socket
 
         If a problem arises in the communication with the client, the
         client socket will also be closed
         """
+        protocol = Protocol(client_sock)
         try:
-            # TODO: Modify the receive to avoid short-reads
-            msg = client_sock.recv(1024).rstrip().decode('utf-8')
+            self.handle_client(protocol)
             addr = client_sock.getpeername()
-            logging.info(f'action: receive_message | result: success | ip: {addr[0]} | msg: {msg}')
-            # TODO: Modify the send to avoid short-writes
-            client_sock.send("{}\n".format(msg).encode('utf-8'))
-        except OSError as e:
+            logging.info(f'action: receive_message | result: success | ip: {addr[0]}')
+        except (ConnectionError, OSError, ProtocolError) as e:
             logging.error(f"action: receive_message | result: fail | error: {e}")
         finally:
             client_sock.close()
@@ -71,3 +70,29 @@ class Server:
         c, addr = self._server_socket.accept()
         logging.info(f'action: accept_connections | result: success | ip: {addr[0]}')
         return c
+
+    def handle_client(self, protocol: Protocol) -> None:
+        """Handles client communication."""
+        message_data: bytes = b''
+
+        try:
+            message_data = protocol.receive_message()
+            message_type = message_data[0]
+            offset = 1
+
+            if message_type != protocol.consts.MSG_BET:
+                raise ProtocolError("Unknown message type", protocol.consts.REJECT_INVALID)
+            bet = protocol.deserialize_bet(message_data[offset:])
+            logging.info(f'action: apuesta_almacenada | result: success | dni: {bet.document} | numero: {bet.number}')
+            store_bets([bet])
+            protocol.send_response(protocol.consts.MSG_SUCCESS, "Bet stored successfully")
+        except ProtocolError as e:
+            if e.code == protocol.consts.MSG_ECHO:
+                logging.info("Handling echo message due to malformed protocol message")
+                protocol.handle_echo_message(message_data)
+            else:
+                logging.error(f'Protocol error: {e}')
+                protocol.send_response(e.code, "Protocol error occurred")
+        except Exception as e:
+            logging.error(f'Unexpected error: {e}')
+            protocol.send_response(protocol.consts.REJECT_INVALID, "Unexpected error occurred")

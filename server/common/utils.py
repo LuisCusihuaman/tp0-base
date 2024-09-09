@@ -1,15 +1,14 @@
 import csv
 import datetime
-import time
-
 
 """ Bets storage location. """
 STORAGE_FILEPATH = "./bets.csv"
 """ Simulated winner number in the lottery contest. """
 LOTTERY_WINNER_NUMBER = 7574
 
-
 """ A lottery bet registry. """
+
+
 class Bet:
     def __init__(self, agency: str, first_name: str, last_name: str, document: str, birthdate: str, number: str):
         """
@@ -24,14 +23,23 @@ class Bet:
         self.birthdate = datetime.date.fromisoformat(birthdate)
         self.number = int(number)
 
+    def __repr__(self) -> str:
+        return f"Bet(agency={self.agency}, first_name='{self.first_name}', last_name='{self.last_name}', document='{self.document}', birth_date='{self.birthdate}', number={self.number})"
+
+
 """ Checks whether a bet won the prize or not. """
+
+
 def has_won(bet: Bet) -> bool:
     return bet.number == LOTTERY_WINNER_NUMBER
+
 
 """
 Persist the information of each bet in the STORAGE_FILEPATH file.
 Not thread-safe/process-safe.
 """
+
+
 def store_bets(bets: list[Bet]) -> None:
     with open(STORAGE_FILEPATH, 'a+') as file:
         writer = csv.writer(file, quoting=csv.QUOTE_MINIMAL)
@@ -39,13 +47,15 @@ def store_bets(bets: list[Bet]) -> None:
             writer.writerow([bet.agency, bet.first_name, bet.last_name,
                              bet.document, bet.birthdate, bet.number])
 
+
 """
 Loads the information all the bets in the STORAGE_FILEPATH file.
 Not thread-safe/process-safe.
 """
+
+
 def load_bets() -> list[Bet]:
     with open(STORAGE_FILEPATH, 'r') as file:
         reader = csv.reader(file, quoting=csv.QUOTE_MINIMAL)
         for row in reader:
             yield Bet(row[0], row[1], row[2], row[3], row[4], row[5])
-
