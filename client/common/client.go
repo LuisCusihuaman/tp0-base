@@ -87,3 +87,8 @@ func (c *Client) StartClientLoop() {
 	}
 	log.Infof("action: loop_finished | result: success | client_id: %v", c.config.ID)
 }
+
+func (c *Client) StopClientLoop() {
+	log.Infof("action: exit | result: success | message: SIGINT received")
+	_ = c.conn.Close()
+}
