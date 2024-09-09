@@ -1,42 +1,12 @@
 package common
 
 import (
-	"bytes"
 	"encoding/binary"
 	"fmt"
 	"net"
 )
 
-// MsgType is an enumeration of the different message types and protocol errors
-type MsgType int
-
-const (
-	MSG_SUCCESS      MsgType = 0x00 // 0x00, Success message
-	MSG_BET          MsgType = 0x01 // 0x01, Bet message
-	MSG_ECHO         MsgType = 0x02 // 0x02, Echo message
-	MSG_ERROR        MsgType = 0x03 // 0x03, Error message
-	REJECT_MALFORMED MsgType = 0x04 // 0x04, Malformed message rejection
-	REJECT_INVALID   MsgType = 0x05 // 0x05, Invalid message rejection
-)
-
-func (m MsgType) String() string {
-	switch m {
-	case REJECT_MALFORMED:
-		return "REJECT_MALFORMED"
-	case REJECT_INVALID:
-		return "REJECT_INVALID"
-	case MSG_SUCCESS:
-		return "MSG_SUCCESS"
-	case MSG_BET:
-		return "MSG_BET"
-	case MSG_ECHO:
-		return "MSG_ECHO"
-	case MSG_ERROR:
-		return "MSG_ERROR"
-	default:
-		return "UNKNOWN"
-	}
-}
+const HEADER_LENGTH = 4
 
 // Protocol defines the behavior of our protocol
 type Protocol struct {
@@ -48,56 +18,33 @@ func NewProtocol(conn net.Conn) *Protocol {
 	return &Protocol{conn: conn}
 }
 
-// SerializeBet serializes a Bet object into binary format according to the protocol.
-func (p *Protocol) SerializeBet(bet Bet) ([]byte, error) {
-	var buffer bytes.Buffer
-
-	// Serialize Agency (4 bytes, uint32)
-	if err := binary.Write(&buffer, binary.BigEndian, uint32(bet.Agency)); err != nil {
-		return nil, err
+// SendMessage sends a serialized message to the server.
+func (p *Protocol) SendMessage(msg Message) error {
+	// Serialize the message
+	body, err := msg.Serialize()
+	if err != nil {
+		return fmt.Errorf("failed to serialize message: %v", err)
 	}
 
-	// Serialize FirstName (4 bytes length prefix + string)
-	if err := p.serializeString(&buffer, bet.FirstName); err != nil {
-		return nil, err
+	// Calculate the total length of the message (header + type + data)
+	header := make([]byte, HEADER_LENGTH)
+	bodyLength := 1 + uint32(len(body)) // 4 bytes header + 1 byte type + data length
+	binary.BigEndian.PutUint32(header, bodyLength)
+
+	// Send the header, message type, and the serialized data
+	if err := p.SendAll(header); err != nil {
+		return fmt.Errorf("failed to send message length: %v", err)
 	}
 
-	// Serialize LastName (4 bytes length prefix + string)
-	if err := p.serializeString(&buffer, bet.LastName); err != nil {
-		return nil, err
+	messageType := byte(msg.MessageType())
+	if err := p.SendAll([]byte{messageType}); err != nil {
+		return fmt.Errorf("failed to send message type: %v", err)
 	}
 
-	// Serialize Document (4 bytes length prefix + string)
-	if err := p.serializeString(&buffer, bet.Document); err != nil {
-		return nil, err
+	if err := p.SendAll(body); err != nil {
+		return fmt.Errorf("failed to send message data: %v", err)
 	}
 
-	// Serialize BirthDate (10 bytes, string "YYYY-MM-DD")
-	birthDateStr := bet.BirthDate.Format("2006-01-02")
-	if len(birthDateStr) != 10 {
-		return nil, fmt.Errorf("invalid birth date format")
-	}
-	if _, err := buffer.WriteString(birthDateStr); err != nil {
-		return nil, err
-	}
-
-	// Serialize Number (4 bytes, uint32)
-	if err := binary.Write(&buffer, binary.BigEndian, uint32(bet.Number)); err != nil {
-		return nil, err
-	}
-
-	return buffer.Bytes(), nil
-}
-
-// serializeString serializes a string with a 4-byte length prefix.
-func (p *Protocol) serializeString(buffer *bytes.Buffer, str string) error {
-	strLength := uint32(len(str))
-	if err := binary.Write(buffer, binary.BigEndian, strLength); err != nil {
-		return err
-	}
-	if _, err := buffer.Write([]byte(str)); err != nil {
-		return err
-	}
 	return nil
 }
 
@@ -117,72 +64,78 @@ func (p *Protocol) SendAll(data []byte) error {
 	return nil
 }
 
-// ReadExactly ensures that exactly n bytes are read from the socket
-func (p *Protocol) ReadExactly(n int) ([]byte, error) {
-	data := make([]byte, n)
-	totalRead := 0
-	for totalRead < n {
-		read, err := p.conn.Read(data[totalRead:])
-		if err != nil {
-			return nil, err
-		}
-		if read == 0 {
-			return nil, fmt.Errorf("socket connection broken")
-		}
-		totalRead += read
-	}
-	return data, nil
+type Response struct {
+	Type    MsgType
+	Message string
+	Body    interface{}
 }
 
-// SendBet sends a serialized Bet object to the server.
-func (p *Protocol) SendBet(bet Bet) error {
-	betData, err := p.SerializeBet(bet)
+// ReceiveResponse reads and processes the server's response
+func (p *Protocol) ReceiveResponse() ([]Response, error) {
+	// Read all available data from the socket
+	buffer := make([]byte, 4096)
+	n, err := p.conn.Read(buffer)
 	if err != nil {
-		log.Errorf("Failed to serialize bet: %v", err)
-		return err
+		return nil, fmt.Errorf("failed to read response: %v", err)
 	}
 
-	messageLength := uint32(len(betData)) + 1 // +1 for the message type
-	header := make([]byte, 4)
-	binary.BigEndian.PutUint32(header, messageLength)
+	var responses []Response
+	offset := 0
 
-	// Send the message length, type, and serialized data
-	if err := p.SendAll(header); err != nil {
-		log.Errorf("Failed to send message length: %v", err)
-		return err
+	for offset < n {
+		// Read the body length to determine the size of the incoming message
+		bodyLength := binary.BigEndian.Uint32(buffer[offset : offset+HEADER_LENGTH])
+		offset += HEADER_LENGTH
+
+		// Extract the message type
+		msgType := MsgType(buffer[offset])
+		offset += 1 // Move the pointer after the message type
+
+		// Process the message based on its type
+		switch msgType {
+		case MSG_SUCCESS:
+			response := p.handleSuccessMessage(buffer, offset)
+			if response != nil {
+				responses = append(responses, *response)
+			}
+			offset += int(bodyLength) - 1
+		case MSG_ERROR:
+			response := p.handleErrorMessage(buffer, offset)
+			responses = append(responses, *response)
+			offset += int(bodyLength) - 1
+		default:
+			response := Response{
+				Type:    msgType,
+				Message: "UNKNOWN_MESSAGE_TYPE",
+				Body:    nil,
+			}
+			offset += int(bodyLength) - 1
+			responses = append(responses, response)
+		}
 	}
 
-	messageType := byte(MSG_BET) // Use constant for MSG_BET
-	if err := p.SendAll([]byte{messageType}); err != nil {
-		log.Errorf("Failed to send message type: %v", err)
-		return err
-	}
-
-	if err := p.SendAll(betData); err != nil {
-		log.Errorf("Failed to send bet data: %v", err)
-		return err
-	}
-
-	return nil
+	return responses, nil
 }
 
-// ReceiveResponse receives and parses the server's response
-func (p *Protocol) ReceiveResponse() (int, string, error) {
-	header, err := p.ReadExactly(4)
-	if err != nil {
-		return 0, "", fmt.Errorf("failed to read response header: %v", err)
+// Function to handle success messages (MSG_SUCCESS)
+func (p *Protocol) handleSuccessMessage(buffer []byte, offset int) *Response {
+	code := buffer[offset]
+	if code == 0 {
+		return nil
 	}
-
-	messageLength := binary.BigEndian.Uint32(header)
-	statusCode, err := p.ReadExactly(1)
-	if err != nil {
-		return 0, "", fmt.Errorf("failed to read status code: %v", err)
+	return &Response{
+		Type:    MSG_SUCCESS,
+		Message: SuccessCode(code).String(),
+		Body:    nil,
 	}
+}
 
-	messageBody, err := p.ReadExactly(int(messageLength) - 5)
-	if err != nil {
-		return 0, "", fmt.Errorf("failed to read message body: %v", err)
+// Function to handle error messages (MSG_ERROR)
+func (p *Protocol) handleErrorMessage(buffer []byte, offset int) *Response {
+	code := buffer[offset]
+	return &Response{
+		Type:    MSG_ERROR,
+		Message: ErrorCode(code).String(),
+		Body:    nil,
 	}
-
-	return int(statusCode[0]), string(messageBody), nil
 }

@@ -2,8 +2,11 @@ import socket
 import logging
 import signal
 import threading
+from typing import Callable
+
+from common import protocol
+from common.lottery import LotteryManager
 from common.protocol import Protocol, ProtocolError
-from common.utils import store_bets
 
 
 class Server:
@@ -17,10 +20,19 @@ class Server:
         # Register the signal handler for graceful shutdown
         signal.signal(signal.SIGTERM, self.__handle_sigterm)
 
+        # Initialize the LotteryManager
+        self.lottery_manager = LotteryManager()
+
+        # Create handlers dictionary
+        self.message_handlers = {
+            protocol.consts.MSG_BET: self.handle_bet,
+            protocol.consts.MSG_BATCH: self.handle_batch,
+        }
+
     def __handle_sigterm(self, signum, frame):
         """
-        Handle SIGTERM signal to initiate a graceful shutdown
-        """
+         Handle SIGTERM signal to initiate a graceful shutdown
+         """
         logging.info('action: exit | result: success | message: SIGINT received')
         self._shutdown_event.set()
         self._server_socket.close()
@@ -36,7 +48,8 @@ class Server:
         while not self._shutdown_event.is_set():
             try:
                 client_sock = self.__accept_new_connection()
-                self.__handle_client_connection(client_sock)
+                if client_sock:
+                    self.__handle_client_connection(client_sock)
             except OSError:
                 break  # server socket being closed
 
@@ -47,15 +60,16 @@ class Server:
         If a problem arises in the communication with the client, the
         client socket will also be closed
         """
-        protocol = Protocol(client_sock)
+        proto = Protocol(client_sock)
         try:
-            self.handle_client(protocol)
-            addr = client_sock.getpeername()
-            logging.info(f'action: receive_message | result: success | ip: {addr[0]}')
-        except (ConnectionError, OSError, ProtocolError) as e:
+            self.handle_client(proto)
+            # addr = client_sock.getpeername()
+            # logging.info(f'action: receive_message | result: success | ip: {addr[0]}')
+        except (ConnectionError, OSError) as e:
             logging.error(f"action: receive_message | result: fail | error: {e}")
         finally:
-            client_sock.close()
+            if client_sock:
+                client_sock.close()
 
     def __accept_new_connection(self):
         """
@@ -64,35 +78,52 @@ class Server:
         Function blocks until a connection to a client is made.
         Then connection created is printed and returned
         """
-
-        # Connection arrived
-        logging.info('action: accept_connections | result: in_progress')
-        c, addr = self._server_socket.accept()
-        logging.info(f'action: accept_connections | result: success | ip: {addr[0]}')
-        return c
-
-    def handle_client(self, protocol: Protocol) -> None:
-        """Handles client communication."""
-        message_data: bytes = b''
-
         try:
-            message_data = protocol.receive_message()
-            message_type = message_data[0]
-            offset = 1
+            client_sock, addr = self._server_socket.accept()
+            logging.info(f'action: accept_connections | result: success | ip: {addr[0]}')
+            return client_sock
+        except BlockingIOError:
+            return None
 
-            if message_type != protocol.consts.MSG_BET:
-                raise ProtocolError("Unknown message type", protocol.consts.REJECT_INVALID)
-            bet = protocol.deserialize_bet(message_data[offset:])
-            logging.info(f'action: apuesta_almacenada | result: success | dni: {bet.document} | numero: {bet.number}')
-            store_bets([bet])
-            protocol.send_response(protocol.consts.MSG_SUCCESS, "Bet stored successfully")
-        except ProtocolError as e:
-            if e.code == protocol.consts.MSG_ECHO:
-                logging.info("Handling echo message due to malformed protocol message")
-                protocol.handle_echo_message(message_data)
-            else:
+    def handle_client(self, proto: Protocol) -> None:
+        """Handles client communication."""
+        while True:
+            try:
+                message_data: bytes = proto.receive_message()
+                message_type = int(message_data[0])  # Ensure message_type is an integer
+
+                # Look for the handler using an integer key
+                handler: Callable[[Protocol, bytes], None] = self.message_handlers.get(message_type)
+
+                if handler:
+                    # Pass the entire message_data to the handler if necessary, or adjust slicing
+                    handler(proto, message_data[1:])
+                else:
+                    raise ProtocolError(f"Unknown message type: {message_type}", proto.consts.ERROR_INVALID_MESSAGE)
+
+            except ProtocolError as e:
                 logging.error(f'Protocol error: {e}')
-                protocol.send_response(e.code, "Protocol error occurred")
-        except Exception as e:
-            logging.error(f'Unexpected error: {e}')
-            protocol.send_response(protocol.consts.REJECT_INVALID, "Unexpected error occurred")
+                proto.send_response(proto.consts.MSG_ERROR, e.code)
+            except ConnectionError:
+                logging.info('Client disconnected, closing connection')
+                break
+            except OSError as e:
+                logging.error(f'OSError during client handling: {e}')
+                break
+            except Exception as e:
+                logging.error(f'Unexpected error: {e}')
+                proto.send_response(proto.consts.MSG_ERROR, proto.consts.ERROR_INVALID_MESSAGE)
+                break
+
+    def handle_bet(self, proto: Protocol, message_data: bytes):
+        logging.info('Received MSG_BET')
+        bet = proto.deserialize_bet(message_data)
+        self.lottery_manager.register_bet(bet)
+        proto.send_response(proto.consts.MSG_SUCCESS, proto.consts.SUCCESS_BET_PROCESSED)
+
+    def handle_batch(self, proto: Protocol, message_data: bytes):
+        logging.info('Received MSG_BATCH')
+        bets = proto.deserialize_batch(message_data)
+        self.lottery_manager.register_batch(bets)
+        logging.info(f'action: apuesta_recibida | result: success | cantidad: {len(bets)}')
+        proto.send_response(proto.consts.MSG_SUCCESS, proto.consts.SUCCESS_BATCH_PROCESSED)

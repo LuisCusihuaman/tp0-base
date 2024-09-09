@@ -69,6 +69,7 @@ if [ "$num_clients" -ge 1 ]; then
       - NUMERO=$numero
     volumes:
       - ./client/config.yaml:/config.yaml:ro
+      - ./client/dataset.zip:/dataset.zip:ro
     networks:
       - testing_net
     depends_on:

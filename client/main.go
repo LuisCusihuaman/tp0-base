@@ -28,25 +28,14 @@ func InitConfig() (*viper.Viper, error) {
 	// Configure viper to read env variables with the CLI_ prefix
 	v.AutomaticEnv()
 
-	// Add bet env variables supported
-	v.BindEnv("nombre")
-	v.BindEnv("apellido")
-	v.BindEnv("documento")
-	v.BindEnv("nacimiento")
-	v.BindEnv("numero")
-
 	v.SetEnvPrefix("cli")
 	// Use a replacer to replace env variables underscores with points. This let us
 	// use nested configurations in the config file and at the same time define
 	// env variables for the nested configurations
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 
-	// Add env variables supported
-	v.BindEnv("id")
-	v.BindEnv("server", "address")
-	v.BindEnv("loop", "period")
-	v.BindEnv("loop", "amount")
-	v.BindEnv("log", "level")
+	// Set default value for batch.numSenders to 1
+	v.SetDefault("batch.numSenders", 1)
 
 	// Try to read configuration from config file. If config file
 	// does not exists then ReadInConfig will fail but configuration
@@ -72,7 +61,7 @@ func InitConfig() (*viper.Viper, error) {
 func InitLogger(logLevel string) error {
 	baseBackend := logging.NewLogBackend(os.Stdout, "", 0)
 	format := logging.MustStringFormatter(
-		`%{time:2006-01-02 15:04:05} %{level:.5s}     %{message}`,
+		`%{time:2006-01-02 15:04:05.000} %{level:.5s}     %{message}`,
 	)
 	backendFormatter := logging.NewBackendFormatter(baseBackend, format)
 
@@ -112,21 +101,16 @@ func main() {
 
 	// Print program config with debugging purposes
 	PrintConfig(v)
+	zipPath := common.GetRelativePath("dataset.zip")
 
 	clientConfig := common.ClientConfig{
 		ServerAddress: v.GetString("server.address"),
 		ID:            v.GetString("id"),
-		LoopAmount:    v.GetInt("loop.amount"),
-		LoopPeriod:    v.GetDuration("loop.period"),
-	}
-
-	bet := common.Bet{
-		Agency:    v.GetInt("id"),
-		FirstName: v.GetString("nombre"),
-		LastName:  v.GetString("apellido"),
-		Document:  v.GetString("documento"),
-		BirthDate: v.GetTime("nacimiento"),
-		Number:    v.GetInt("numero"),
+		MaxBatchSize:  v.GetInt("batch.maxAmount"),
+		NumSenders:    v.GetInt("batch.numSenders"),
+		ZipPath:       zipPath,
+		//LoopAmount:    v.GetInt("loop.amount"),
+		//LoopPeriod:    v.GetDuration("loop.period"),
 	}
 
 	client := common.NewClient(clientConfig)
@@ -134,7 +118,8 @@ func main() {
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		<-sigs
-		client.StopClientLoop()
+		log.Infof("action: exit | result: success | message: SIGINT received")
+		client.Close()
 	}()
-	client.StartClientLoop(bet)
+	client.StartClientLoop()
 }

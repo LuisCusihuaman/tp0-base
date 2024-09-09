@@ -7,4 +7,5 @@ loop:
 log:
   level: "INFO"
 batch:
-  maxAmount: 10
+  maxAmount: 8 # 8KB
+  numSenders: 1
