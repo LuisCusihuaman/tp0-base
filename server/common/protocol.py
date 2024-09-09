@@ -12,12 +12,16 @@ consts = SimpleNamespace(
     MSG_BET=0x10,  # Bet message
     MSG_BATCH=0x11,  # Batch message
     MSG_ECHO=0x12,  # Echo message
+    MSG_NOTIFY=0x13,  # Notify message (Agency finished sending bets)
+    MSG_WINNERS_QUERY=0x14,  # Query for winners by agency
+    MSG_WINNERS_LIST=0x15,  # Winners list response
     SUCCESS_BATCH_PROCESSED=0x01,  # Success code for successful batch processing
     SUCCESS_BET_PROCESSED=0x02,  # Success code for successful bet processing
     ERROR_BATCH_FAILED=0x01,  # Error code for batch processing failure
     ERROR_BET_FAILED=0x02,  # Error code for bet processing failure
     ERROR_MALFORMED_MESSAGE=0x03,  # Error code for malformed message
     ERROR_INVALID_MESSAGE=0x04,  # Error code for invalid message
+    ERROR_LOTTERY_NOT_DONE=0x05,  # Error code for querying winners before lottery is done
     MAX_ECHO_MSG_LENGTH=1024,  # Maximum echo message length
     MAX_BATCH_MSG_LENGTH=8192,  # Maximum batch message length
     MIN_PROTOCOL_MESSAGE_LENGTH=5  # Minimum protocol message length
@@ -99,6 +103,19 @@ class Protocol:
         response = header + bytes([msg_type, code])
         self.send_all(response)
 
+    def send_winners_list(self, winners: List[int]) -> None:
+        """Sends the list of winners to the client."""
+        winner_count = len(winners)
+        body_length = 1 + (winner_count * 4)  # 1 byte for message type + winners
+        header = struct.pack('>I', body_length)
+        response = header + bytes([self.consts.MSG_WINNERS_LIST])
+        response += struct.pack('>I', winner_count)
+
+        for winner in winners:
+            response += struct.pack('>I', winner)
+
+        self.send_all(response)
+
     def handle_echo_message(self, initial_data: bytes) -> None:
         """Handles echo messages by reading the rest of the message and sending it back."""
         remaining_length = self.consts.MAX_ECHO_MSG_LENGTH - len(initial_data)
@@ -163,6 +180,16 @@ class Protocol:
             logging.error(f"action: apuesta_recibida | result: fail | cantidad: {len(bets)}")
             raise ProtocolError(f"Failed to deserialize batch: {str(e)}", self.consts.ERROR_BATCH_FAILED)
         return bets
+
+    def deserialize_agency_id(self, data: bytes) -> int:
+        """Deserializes an agency ID from binary data."""
+        try:
+            agency_id: int = struct.unpack('>I', data[:4])[0]
+            return agency_id
+        except Exception as e:
+            logging.error(f"Unexpected error during Agency ID deserialization: {str(e)}")
+            raise ProtocolError(f"Unexpected error during Agency ID deserialization: {str(e)}",
+                                self.consts.ERROR_MALFORMED_MESSAGE)
 
     def deserialize_string(self, data: bytes, offset: int) -> Tuple[str, int]:
         """Deserializes a string from binary data, reading the length prefix first."""

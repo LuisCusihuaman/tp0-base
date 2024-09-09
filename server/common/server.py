@@ -27,6 +27,8 @@ class Server:
         self.message_handlers = {
             protocol.consts.MSG_BET: self.handle_bet,
             protocol.consts.MSG_BATCH: self.handle_batch,
+            protocol.consts.MSG_NOTIFY: self.handle_notify,
+            protocol.consts.MSG_WINNERS_QUERY: self.handle_winners_query
         }
 
     def __handle_sigterm(self, signum, frame):
@@ -127,3 +129,24 @@ class Server:
         self.lottery_manager.register_batch(bets)
         logging.info(f'action: apuesta_recibida | result: success | cantidad: {len(bets)}')
         proto.send_response(proto.consts.MSG_SUCCESS, proto.consts.SUCCESS_BATCH_PROCESSED)
+
+    def handle_notify(self, proto: Protocol, message_data: bytes):
+        logging.info('Received MSG_NOTIFY')
+        agency_id = proto.deserialize_agency_id(message_data)
+        self.lottery_manager.notify_agency(agency_id)
+        if self.lottery_manager.all_agencies_notified():
+            logging.info('All agencies have notified. Proceeding with the lottery draw.')
+            self.lottery_manager.perform_lottery()
+        logging.info(f'action: notify_received | result: success | agency_id: {agency_id}')
+
+    def handle_winners_query(self, proto: Protocol, message_data: bytes):
+        logging.info('Received MSG_WINNERS_QUERY')
+        agency_id = proto.deserialize_agency_id(message_data)
+        winners = self.lottery_manager.query_winners(agency_id)
+
+        if winners is not None:
+            proto.send_winners_list(winners)
+            logging.info('action: winners_query | result: success')
+        else:
+            proto.send_response(proto.consts.MSG_ERROR, proto.consts.ERROR_LOTTERY_NOT_DONE)
+            logging.info('action: winners_query | result: fail | reason: lottery not done')

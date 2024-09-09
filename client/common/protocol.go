@@ -103,6 +103,10 @@ func (p *Protocol) ReceiveResponse() ([]Response, error) {
 			response := p.handleErrorMessage(buffer, offset)
 			responses = append(responses, *response)
 			offset += int(bodyLength) - 1
+		case MSG_WINNERS_LIST:
+			response := p.handleWinnersList(buffer, offset, int(bodyLength))
+			responses = append(responses, *response)
+			offset += int(bodyLength) - 1
 		default:
 			response := Response{
 				Type:    msgType,
@@ -115,6 +119,28 @@ func (p *Protocol) ReceiveResponse() ([]Response, error) {
 	}
 
 	return responses, nil
+}
+
+// Function to handle winners list messages (MSG_WINNERS_LIST)
+func (p *Protocol) handleWinnersList(buffer []byte, offset, bodyLength int) *Response {
+	winnerCount := binary.BigEndian.Uint32(buffer[offset : offset+4])
+	offset += 4
+
+	var winners []uint32
+	for i := 0; i < int(winnerCount); i++ {
+		if offset+4 > bodyLength {
+			break
+		}
+		winner := binary.BigEndian.Uint32(buffer[offset : offset+4])
+		winners = append(winners, winner)
+		offset += 4
+	}
+
+	return &Response{
+		Type:    MSG_WINNERS_LIST,
+		Message: "Winners list received",
+		Body:    winners,
+	}
 }
 
 // Function to handle success messages (MSG_SUCCESS)
